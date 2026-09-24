@@ -1,0 +1,64 @@
+{
+  "variables": [
+    "surface",
+    "nb_pieces",
+    "surface_par_piece",
+    "nb_dependances",
+    "t_mois",
+    "lat",
+    "lon",
+    "dep",
+    "zone",
+    "dist_centre_paris_m",
+    "dist_gare_m",
+    "dist_metro_rer_m",
+    "nb_gares_1km",
+    "log_knn10",
+    "log_knn30",
+    "knn30_rayon_m",
+    "dpe_classe",
+    "etage",
+    "annee_construction"
+  ],
+  "categorielles": [
+    "dep",
+    "zone"
+  ],
+  "t_mois_max": 72,
+  "date_derniere_vente": "2025-12-31",
+  "n_arbres": 2830,
+  "metriques_test": {
+    "Baseline (médiane 10 voisins)": {
+      "erreur_mediane_%": 11.2,
+      "erreur_moyenne_%": 15.4,
+      "part_a_10%_pres": 45.5,
+      "part_a_20%_pres": 74.2
+    },
+    "LightGBM": {
+      "erreur_mediane_%": 9.3,
+      "erreur_moyenne_%": 13.1,
+      "part_a_10%_pres": 52.9,
+      "part_a_20%_pres": 80.7
+    }
+  },
+  "fourchettes": {
+    "50": {
+      "quantiles": [
+        0.25,
+        0.75
+      ],
+      "correction_log": 0.0141,
+      "couverture": 0.499,
+      "demi_largeur_mediane_%": 9.5
+    },
+    "80": {
+      "quantiles": [
+        0.1,
+        0.9
+      ],
+      "correction_log": 0.032,
+      "couverture": 0.794,
+      "demi_largeur_mediane_%": 19.1
+    }
+  }
+}

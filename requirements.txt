@@ -1,0 +1,12 @@
+pandas
+pyarrow
+numpy
+requests
+scikit-learn
+lightgbm
+shap
+matplotlib
+streamlit
+folium
+streamlit-folium
+ipykernel

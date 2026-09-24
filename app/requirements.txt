@@ -1,0 +1,10 @@
+streamlit
+pandas
+pyarrow
+numpy
+scikit-learn
+lightgbm
+requests
+altair
+folium
+streamlit-folium

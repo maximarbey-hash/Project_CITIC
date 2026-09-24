@@ -1,0 +1,11 @@
+# Environnement Python local
+.venv/
+__pycache__/
+*.pyc
+.vscode/
+
+# Données lourdes et intermédiaires : jamais sur GitHub
+# (le site n'a besoin que de app/data et app/models, qui eux sont publiés)
+data/
+models/
+reports/
