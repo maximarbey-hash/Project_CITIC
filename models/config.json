@@ -24,9 +24,12 @@
     "dep",
     "zone"
   ],
+  "monotones": {
+    "dpe_classe": -1
+  },
   "t_mois_max": 72,
   "date_derniere_vente": "2025-12-31",
-  "n_arbres": 2830,
+  "n_arbres": 2515,
   "metriques_test": {
     "Baseline (médiane 10 voisins)": {
       "erreur_mediane_%": 11.2,
@@ -36,9 +39,9 @@
     },
     "LightGBM": {
       "erreur_mediane_%": 9.3,
-      "erreur_moyenne_%": 13.1,
+      "erreur_moyenne_%": 13.0,
       "part_a_10%_pres": 52.9,
-      "part_a_20%_pres": 80.7
+      "part_a_20%_pres": 81.0
     }
   },
   "fourchettes": {
@@ -47,18 +50,18 @@
         0.25,
         0.75
       ],
-      "correction_log": 0.0141,
-      "couverture": 0.499,
-      "demi_largeur_mediane_%": 9.5
+      "correction_log": 0.0143,
+      "couverture": 0.502,
+      "demi_largeur_mediane_%": 9.7
     },
     "80": {
       "quantiles": [
         0.1,
         0.9
       ],
-      "correction_log": 0.032,
-      "couverture": 0.794,
-      "demi_largeur_mediane_%": 19.1
+      "correction_log": 0.0329,
+      "couverture": 0.797,
+      "demi_largeur_mediane_%": 19.7
     }
   }
 }

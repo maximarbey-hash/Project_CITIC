@@ -9,7 +9,8 @@ Sorties : models/lgbm_median.txt + lgbm_q10/q25/q75/q90.txt (bornes des fourchet
 Démarche :
   1. Découpage PAR DATE : train (passé) / validation / test (6 derniers mois)
   2. Baseline naïve : prix/m² médian des 10 ventes voisines -> le score à battre
-  3. LightGBM (cible = log du prix/m²), arrêt précoce sur la validation
+  3. LightGBM (cible = log du prix/m², perte de Huber), arrêt précoce sur la validation,
+     prix contraint à baisser quand l'étiquette DPE se dégrade
   4. Deux fourchettes, chacune calibrée sur la validation pour tenir sa promesse :
      - resserrée à 50 % (quantiles 25 % et 75 %)
      - large à 80 %     (quantiles 10 % et 90 %)
@@ -49,6 +50,14 @@ VARIABLES = [
 # Variables issues des DPE (étape 3b) : ajoutées seulement si elles existent
 VARIABLES_DPE = ["dpe_classe", "etage", "annee_construction"]
 CATEGORIELLES = ["dep", "zone"]
+# Contraintes monotones : -1 = le prix ne peut que BAISSER quand la variable augmente.
+# dpe_classe va de 1 (A) à 7 (G) : à tout le reste égal, une moins bonne étiquette
+# ne peut jamais rendre un bien plus cher. Imposé dans les arbres eux-mêmes.
+MONOTONES = {"dpe_classe": -1}
+# LightGBM refuse ces contraintes avec les pertes L1 et quantile. Le modèle médian
+# utilise donc la perte de Huber (quadratique sous 0,1 en log, soit ~10 %, linéaire
+# au-delà : aussi robuste que L1 aux ventes atypiques). Les quantiles restent libres.
+OBJECTIF_MEDIAN = dict(objective="huber", alpha=0.1)
 
 PARAMS = dict(
     learning_rate=0.05, num_leaves=127, min_child_samples=50,
@@ -101,6 +110,9 @@ def metriques(vrai_prix: np.ndarray, prix_estime: np.ndarray) -> dict:
 # --------------------------------------------------------------------------
 def entrainer(X, y, X_val=None, y_val=None, n_estimators=None, **objectif):
     params = {**PARAMS, **objectif}
+    if params["objective"] not in ("l1", "quantile"):
+        params["monotone_constraints"] = [MONOTONES.get(c, 0) for c in X.columns]
+        params["monotone_constraints_method"] = "advanced"   # la moins restrictive
     if n_estimators:
         params["n_estimators"] = n_estimators
     modele = lgb.LGBMRegressor(**params)
@@ -110,6 +122,17 @@ def entrainer(X, y, X_val=None, y_val=None, n_estimators=None, **objectif):
     else:
         modele.fit(X, y, categorical_feature=CATEGORIELLES)
     return modele
+
+
+def decalage(m_q, m_med, X: pd.DataFrame) -> np.ndarray:
+    """Écart (en log) entre un quantile et le prix central, MOYENNÉ sur les étiquettes A…G.
+    Les modèles quantiles n'acceptent pas la contrainte monotone : en appliquant un écart
+    qui ne dépend pas du DPE autour du prix central (lui monotone), les bornes héritent
+    de la monotonie. Le site (moteur.py) utilise exactement la même formule."""
+    if "dpe_classe" not in X.columns:
+        return m_q.predict(X) - m_med.predict(X)
+    return np.mean([m_q.predict(X.assign(dpe_classe=k)) - m_med.predict(X.assign(dpe_classe=k))
+                    for k in range(1, 8)], axis=0)
 
 
 def main():
@@ -128,9 +151,9 @@ def main():
     base = test["knn10_prix_m2"].fillna(test["knn30_prix_m2"]).fillna(df["prix_m2"].median())
     resultats["Baseline (médiane 10 voisins)"] = metriques(vrai, base.to_numpy())
 
-    # --- LightGBM médian (objectif L1 sur le log = erreur relative robuste)
+    # --- LightGBM médian (perte de Huber sur le log = erreur relative robuste)
     print("\nEntraînement LightGBM (peut prendre quelques minutes)...")
-    m_med = entrainer(X_tr, train["y"], X_va, valid["y"], objective="l1")
+    m_med = entrainer(X_tr, train["y"], X_va, valid["y"], **OBJECTIF_MEDIAN)
     n_arbres = m_med.best_iteration_
     print(f"  meilleur nombre d'arbres : {n_arbres}")
     pred = np.exp(m_med.predict(X_te))
@@ -145,11 +168,15 @@ def main():
     for niveau, (q_bas, q_haut) in FOURCHETTES.items():
         m_bas = entrainer(X_tr, train["y"], n_estimators=n_arbres, objective="quantile", alpha=q_bas)
         m_haut = entrainer(X_tr, train["y"], n_estimators=n_arbres, objective="quantile", alpha=q_haut)
-        ecarts = np.maximum(m_bas.predict(X_va) - y_va, y_va - m_haut.predict(X_va))
+        centre_va = m_med.predict(X_va)
+        ecarts = np.maximum(centre_va + decalage(m_bas, m_med, X_va) - y_va,
+                            y_va - centre_va - decalage(m_haut, m_med, X_va))
         n = len(ecarts)
         correction = float(np.quantile(ecarts, min(1.0, niveau / 100 * (n + 1) / n)))
-        bas = np.exp(m_bas.predict(X_te) - correction)
-        haut = np.exp(m_haut.predict(X_te) + correction)
+        # Même calcul que le site, y compris la sécurité « la fourchette encadre l'estimation »
+        centre_te = np.log(pred)
+        bas = np.exp(np.minimum(centre_te + decalage(m_bas, m_med, X_te) - correction, centre_te))
+        haut = np.exp(np.maximum(centre_te + decalage(m_haut, m_med, X_te) + correction, centre_te))
         fourchettes[str(niveau)] = {
             "quantiles": [q_bas, q_haut],
             "correction_log": round(correction, 4),
@@ -199,7 +226,7 @@ def main():
     X_all, y_all = df[VARIABLES], df["y"]
     n_final = int(n_arbres * 1.1)   # un peu plus d'arbres car un peu plus de données
     MODELS_DIR.mkdir(exist_ok=True)
-    objectifs = {"median": dict(objective="l1")}
+    objectifs = {"median": OBJECTIF_MEDIAN}
     for q_bas, q_haut in FOURCHETTES.values():
         for q in (q_bas, q_haut):
             objectifs[f"q{round(100 * q)}"] = dict(objective="quantile", alpha=q)
@@ -210,6 +237,7 @@ def main():
     config = {
         "variables": VARIABLES,
         "categorielles": CATEGORIELLES,
+        "monotones": {v: s for v, s in MONOTONES.items() if v in VARIABLES},
         "t_mois_max": int(df["t_mois"].max()),
         "date_derniere_vente": f"{df['date'].max():%Y-%m-%d}",
         "n_arbres": n_final,

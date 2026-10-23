@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 import requests
-from sklearn.isotonic import IsotonicRegression
 from sklearn.neighbors import BallTree
 
 BASE = Path(__file__).parent
@@ -146,25 +145,27 @@ class Estimateur:
                 label="", dpe_classe=None, etage=None) -> dict:
         X, voisins = self.variables(lat, lon, code_insee, surface, nb_pieces, nb_dependances,
                                     label, dpe_classe, etage)
+        # Cohérence DPE (le prix ne monte jamais quand l'étiquette se dégrade) :
+        # garantie par une contrainte monotone imposée à l'entraînement (04_modele.py).
         log_central = self.modeles["median"].predict(X)[0]
 
-        # Cohérence DPE : à tout le reste égal, le prix ne doit jamais AUGMENTER quand
-        # l'étiquette se dégrade. On prédit le même bien pour A, B, ..., G, puis une
-        # régression isotonique (décroissante) corrige les éventuelles inversions.
-        ajustement_dpe = 0.0
-        if dpe_classe is not None and "dpe_classe" in X.columns:
+        # Les bornes = prix central + écart au quantile MOYENNÉ sur A…G : cet écart ne
+        # dépend pas du DPE, donc les bornes baissent elles aussi avec l'étiquette.
+        # Même formule que la calibration (decalage() dans 04_modele.py).
+        if "dpe_classe" in X.columns:
             X7 = pd.concat([X] * 7, ignore_index=True)
             X7["dpe_classe"] = np.arange(1, 8)
-            brut = self.modeles["median"].predict(X7)
-            lisse = IsotonicRegression(increasing=False).fit(np.arange(1, 8), brut)
-            ajustement_dpe = float(lisse.predict([dpe_classe])[0] - brut[dpe_classe - 1])
-            log_central += ajustement_dpe
+        else:
+            X7 = X
+        centre7 = self.modeles["median"].predict(X7)
 
         fourchettes = {}
         for niveau, f in self.config["fourchettes"].items():
             q_bas, q_haut = (f"q{round(100 * q)}" for q in f["quantiles"])
-            log_bas = self.modeles[q_bas].predict(X)[0] - f["correction_log"] + ajustement_dpe
-            log_haut = self.modeles[q_haut].predict(X)[0] + f["correction_log"] + ajustement_dpe
+            ecart_bas = float(np.mean(self.modeles[q_bas].predict(X7) - centre7))
+            ecart_haut = float(np.mean(self.modeles[q_haut].predict(X7) - centre7))
+            log_bas = log_central + ecart_bas - f["correction_log"]
+            log_haut = log_central + ecart_haut + f["correction_log"]
             # Sécurité : la fourchette doit encadrer l'estimation centrale
             fourchettes[int(niveau)] = (float(np.exp(min(log_bas, log_central))),
                                         float(np.exp(max(log_haut, log_central))))
@@ -180,9 +181,6 @@ class Estimateur:
             for groupe, variables in GROUPES.items()
             if any(v in par_variable for v in variables)      # groupes présents dans le modèle
         ])
-        # L'ajustement de cohérence est attribué au facteur DPE
-        explication.loc[explication["facteur"] == "Performance énergétique (DPE)",
-                        "effet_log"] += ajustement_dpe
         explication["effet_%"] = 100 * (np.exp(explication["effet_log"]) - 1)
 
         return {
